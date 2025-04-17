@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include <sys/time.h>
+
 #include "ext_post.h"
 #include "ext_proto.h"
 #include "tinyosc.h"
@@ -22,6 +24,16 @@
  * Defines a custom data type that groups together related data.
  * This structure contains all the state information needed for one instance of the tidal scheduler.
  */
+
+#define MAX_SCHEDULED_EVENT 64;
+
+typedef struct _scheduled_event {
+    t_symbol *address;
+    int atom_count;
+    t_atom atoms[32];
+    double execution_time;
+    bool active;
+} t_scheduled_event;
 
 typedef struct _tidal_scheduler
 {
@@ -39,6 +51,14 @@ typedef struct _tidal_scheduler
 
     // Clock
     void* m_clock;
+
+    // The time offset to convert NTP time -> max time
+    double time_offset;
+
+    t_atom scheduled_atoms[32];
+    int scheduled_atom_count;
+    t_symbol* scheduled_address;
+
 
 } t_tidal_scheduler;
 
@@ -130,7 +150,6 @@ void* tidal_scheduler_listener(void* arg)
         if (!(bytes_received > 0)) {
             systhread_sleep(1);
         }
-
         else {
             // check if bundle
             if (tosc_isBundle(buffer)) {
@@ -140,11 +159,18 @@ void* tidal_scheduler_listener(void* arg)
                 // Get timetag
                 uint64_t timetag = tosc_getTimetag(&bundle);
                 double osc_seconds = osc_timetag_to_seconds(timetag);
-                double system_seconds = systimer_gettime();
+                double max_time_ms = systimer_gettime();
+                double max_time_seconds = max_time_ms / 1000.0;
 
-                object_post((t_object*)x, "\n");
-                object_post((t_object*)x, "sys time : %f", system_seconds);
-                object_post((t_object*)x, "osc time : %f", osc_seconds);
+                double target_max_time = osc_seconds + x->time_offset;
+                double delay_time = target_max_time - max_time_seconds;
+                double delay_time_ms = delay_time * 1000.0;
+
+                /*object_post((t_object*)x, "\n");*/
+                /*object_post((t_object*)x, "osc time in seconds: %.3f", osc_seconds);*/
+                /*object_post((t_object*)x, "max time in seconds: %.3f", max_time_seconds);*/
+                /*object_post((t_object*)x, "target max time    : %.3f", target_max_time);*/
+                object_post((t_object*)x, "delay time (ms) -> %.3f", delay_time_ms);
 
                 tosc_message osc;
                 while (tosc_getNextMessage(&bundle, &osc)) {
@@ -176,8 +202,23 @@ void* tidal_scheduler_listener(void* arg)
                             }
                         }
                     }
+
                     critical_enter(0);
-                    outlet_anything(x->m_outlet, gensym((char*)address), atom_count, atoms);
+
+                    if (delay_time_ms <= 0) {
+                        outlet_anything(x->m_outlet, gensym((char*)address), atom_count, atoms);
+                        object_post((t_object*)x, "delay time was 0ms or less !");
+                    }
+                    else {
+                        x->scheduled_address = gensym((char*)address);
+                        x->scheduled_atom_count = atom_count;
+
+                        for (int i = 0; i < atom_count; i++) {
+                            x->scheduled_atoms[i] = atoms[i];
+                        }
+
+                        clock_fdelay(x->m_clock, delay_time_ms);
+                    }
                     critical_exit(0);
                 }
             }
@@ -191,8 +232,10 @@ void* tidal_scheduler_listener(void* arg)
 
 void tidal_scheduler_tick(t_tidal_scheduler* x)
 {
-    double system_time = systimer_gettime();
-    object_post((t_object*)x, "System time : %f", system_time);
+    if (x->scheduled_address && x->scheduled_atom_count > 0) {
+        outlet_anything(x->m_outlet, x->scheduled_address, x->scheduled_atom_count, x->scheduled_atoms);
+        /*object_post((t_object*)x, "outputing scheduled message !");*/
+    }
 }
 
 /* The destructor function that cleans up when the object is deleted:
@@ -217,6 +260,22 @@ void tidal_scheduler_free(t_tidal_scheduler* x)
     object_free(x->m_clock);
 }
 
+void set_time_offset(t_tidal_scheduler* t)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    double unix_time = tv.tv_sec + (tv.tv_usec / 1000000.0);
+    /*object_post((t_object*)t, "UNIX time at object creation (sec): %.3f", unix_time);*/
+
+    const unsigned long NTP_UNIX_OFFSET = 2208988800UL;
+    double ntp_seconds = unix_time + NTP_UNIX_OFFSET;
+    double max_seconds = systimer_gettime() / 1000.0;
+
+    t->time_offset = max_seconds - ntp_seconds;
+    /*object_post((t_object*)t, "Calculated time offset: %.3f", t->time_offset);*/
+}
+
 /* The constructor function that gets called when a new instance of the object is created:
  *
  *     - Allocates memory for the object
@@ -229,25 +288,37 @@ void tidal_scheduler_free(t_tidal_scheduler* x)
 
 void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 {
+    // Declare a pointer to the t_tidal_scheduler struct
+    // Initialize to NULL to avoid problems if allocation fails
     t_tidal_scheduler* x = NULL;
-    long i;
 
+    // Allocate memory for the object and check if allocation is successful
     if ((x = (t_tidal_scheduler*)object_alloc(tidal_scheduler_class))) {
+
         object_post((t_object*)x, "Initialized");
+
+        set_time_offset(x);
+
+        // Default OSC port
         x->port = 7400;
 
+        // If the object has arguments and the first one is a number
+        // replace the default OSC port with the number
         if (argc > 0 && argv[0].a_type == A_LONG) {
             x->port = atom_getlong(argv);
         }
 
-        // create outlet
+        // Create object outlet
         x->m_outlet = outlet_new(x, NULL);
 
         // Create clock
         x->m_clock = clock_new((t_object*)x, (method)tidal_scheduler_tick);
 
-        // create socket
+        // create UDP socket
+        // AF_INET = IPv4, SOCK_DGRAM = UDP mode (without connexion)
         x->socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+        // Check if socket creation succeeded
         if (x->socket_fd < 0) {
             object_error((t_object*)x, "Failed to create socket");
             return x;
@@ -261,6 +332,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
         addr.sin_addr.s_addr = INADDR_ANY;
 
         // Binding the socket to the address and port
+        // Make the socket able to receive messages adressed to the port
         if (bind(x->socket_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
             object_error((t_object*)x, "Failed to bind socket to port %ld", x->port);
             close(x->socket_fd);
@@ -269,8 +341,11 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
         }
         object_post((t_object*)x, "Bound to port %ld", x->port);
 
-        // start listening thread
+        // Configure and start
         x->thread_running = 1;
+
+        // Create new thread which will execute tidal_scheduler_listener
+        // This thread continuously listen to OSC message coming on the socket
         systhread_create((method)tidal_scheduler_listener, x, 0, 0, 0, &x->thread);
         object_post((t_object*)x, "Listener thread started");
     }
