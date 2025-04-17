@@ -31,10 +31,14 @@
 typedef struct _scheduled_event
 {
     t_symbol* address;
+
     int atom_count;
     t_atom atoms[32];
+
     double execution_time;
+
     bool active;
+
 } t_scheduled_event;
 
 typedef struct _tidal_scheduler
@@ -56,10 +60,6 @@ typedef struct _tidal_scheduler
 
     // The time offset to convert NTP time -> max time
     double time_offset;
-
-    /*t_atom scheduled_atoms[32];*/
-    /*int scheduled_atom_count;*/
-    /*t_symbol* scheduled_address;*/
 
     t_scheduled_event events[MAX_SCHEDULED_EVENT];
     int event_count;
@@ -284,6 +284,22 @@ void tidal_scheduler_tick(t_tidal_scheduler* x)
     }
 }
 
+void set_base_time_offset(t_tidal_scheduler* x)
+{
+    // Set the time offset
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    double unix_time = tv.tv_sec + (tv.tv_usec / 1000000.0);
+    /*object_post((t_object*)t, "UNIX time at object creation (sec): %.3f", unix_time);*/
+
+    const unsigned long NTP_UNIX_OFFSET = 2208988800UL;
+    double ntp_seconds = unix_time + NTP_UNIX_OFFSET;
+    double max_seconds = systimer_gettime() / 1000.0;
+
+    x->time_offset = max_seconds - ntp_seconds;
+    object_post((t_object*)x, "base time offset: %.3f", x->time_offset);
+}
+
 /* The constructor function that gets called when a new instance of the object is created:
  *
  *     - Allocates memory for the object
@@ -305,21 +321,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 
         object_post((t_object*)x, "Initialized");
 
-        // Set the time offset
-
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-
-        double unix_time = tv.tv_sec + (tv.tv_usec / 1000000.0);
-        /*object_post((t_object*)t, "UNIX time at object creation (sec): %.3f", unix_time);*/
-
-        const unsigned long NTP_UNIX_OFFSET = 2208988800UL;
-        double ntp_seconds = unix_time + NTP_UNIX_OFFSET;
-        double max_seconds = systimer_gettime() / 1000.0;
-
-        x->time_offset = max_seconds - ntp_seconds;
-
-        /*object_post((t_object*)t, "Calculated time offset: %.3f", t->time_offset);*/
+        set_base_time_offset(x);
 
         // Default OSC port
         x->port = 7400;
@@ -331,6 +333,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 
         // Create object outlet
         x->m_outlet = outlet_new(x, NULL);
+
         // Create clock
         x->m_clock = clock_new((t_object*)x, (method)tidal_scheduler_tick);
 
@@ -368,7 +371,6 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
         systhread_create((method)tidal_scheduler_listener, x, 0, 0, 0, &x->thread);
         object_post((t_object*)x, "Listener thread started");
     }
-
     return x;
 }
 
@@ -393,4 +395,3 @@ void tidal_scheduler_free(t_tidal_scheduler* x)
 
     object_free(x->m_clock);
 }
-
