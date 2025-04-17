@@ -26,7 +26,7 @@
  * This structure contains all the state information needed for one instance of the tidal scheduler.
  */
 
-#define MAX_SCHEDULED_EVENT 2048
+#define SCHEDULER_QUEUE_SIZE 2048
 
 typedef struct _scheduled_event
 {
@@ -46,22 +46,17 @@ typedef struct _tidal_scheduler
     // Max object
     t_object obj;
     void* m_outlet;
-
     // OSC
     int socket_fd;
     long port;
-
     // Thread
     t_systhread thread;
     int thread_running;
-
     // Clock
     void* m_clock;
-
     // The time offset to convert NTP time -> max time
     double time_offset;
-
-    t_scheduled_event events[MAX_SCHEDULED_EVENT];
+    t_scheduled_event events[SCHEDULER_QUEUE_SIZE];
     int event_count;
     bool scheduler_running;
 
@@ -80,7 +75,6 @@ static t_class* tidal_scheduler_class;
  *   - Sets up the constructor and destructor methods
  *   - Registers the class in the system
  */
-
 void ext_main(void* r)
 {
     t_class* c;
@@ -98,7 +92,7 @@ void ext_main(void* r)
 
 void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count, t_atom* atoms, double execution_time)
 {
-    if (x->event_count < MAX_SCHEDULED_EVENT) {
+    if (x->event_count < SCHEDULER_QUEUE_SIZE) {
         int idx = x->event_count++;
         x->events[idx].address = address;
         x->events[idx].atom_count = atom_count;
@@ -111,7 +105,7 @@ void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count
 
         if (!x->scheduler_running) {
             x->scheduler_running = true;
-            clock_fdelay(x->m_clock, 0.01);
+            clock_fdelay(x->m_clock, 1);
         }
     }
     else {
@@ -125,7 +119,6 @@ void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count
  *    The lower 32 bits represent fractions of a second.
  *    It returns a double representing the time in seconds.
  */
-
 double osc_timetag_to_seconds(uint64_t timetag)
 {
     // Upper 32 bits (seconds)
@@ -153,7 +146,6 @@ double osc_timetag_to_seconds(uint64_t timetag)
  *
  * If no data is available, it sleeps briefly
  */
-
 void* tidal_scheduler_listener(void* arg)
 {
     t_tidal_scheduler* x = (t_tidal_scheduler*)arg;
@@ -240,6 +232,8 @@ void* tidal_scheduler_listener(void* arg)
 // The callback function for the clock
 void tidal_scheduler_tick(t_tidal_scheduler* x)
 {
+    critical_enter(0);
+
     double current_time = systimer_gettime();
     double next_event_time = DBL_MAX;
 
@@ -282,11 +276,12 @@ void tidal_scheduler_tick(t_tidal_scheduler* x)
     else {
         x->scheduler_running = false;
     }
+
+    critical_exit(0);
 }
 
 void set_base_time_offset(t_tidal_scheduler* x)
 {
-    // Set the time offset
     struct timeval tv;
     gettimeofday(&tv, NULL);
     double unix_time = tv.tv_sec + (tv.tv_usec / 1000000.0);
@@ -309,7 +304,6 @@ void set_base_time_offset(t_tidal_scheduler* x)
  *     - Sets up a UDP socket on the specified port
  *     - Starts a listener thread that will receive OSC messages
  */
-
 void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 {
     // Declare a pointer to the t_tidal_scheduler struct
@@ -380,7 +374,6 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
  *    - Closes the socket
  *    - Frees the clock object
  */
-
 void tidal_scheduler_free(t_tidal_scheduler* x)
 {
     if (x->thread_running) {
