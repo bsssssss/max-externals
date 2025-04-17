@@ -26,38 +26,34 @@
  * This structure contains all the state information needed for one instance of the tidal scheduler.
  */
 
-#define SCHEDULER_QUEUE_SIZE 2048
+#define SCHEDULER_QUEUE_MAX_SIZE 2048
 
 typedef struct _scheduled_event
 {
     t_symbol* address;
-
     int atom_count;
     t_atom atoms[32];
-
     double execution_time;
-
     bool active;
 
 } t_scheduled_event;
 
 typedef struct _tidal_scheduler
 {
-    // Max object
-    t_object obj;
-    void* m_outlet;
-    // OSC
-    int socket_fd;
-    long port;
-    // Thread
-    t_systhread thread;
+    t_object obj; // max object
+    void* m_outlet; // max outlet
+    void* m_clock; // max clock
+
+    int socket_fd; // udp socket
+    long port; // udp port
+
+    t_systhread thread; // main thread
     int thread_running;
-    // Clock
-    void* m_clock;
-    // The time offset to convert NTP time -> max time
-    double time_offset;
-    t_scheduled_event events[SCHEDULER_QUEUE_SIZE];
+
+    double time_offset; // time offset to convert absolute osc timetags to relative time
+    t_scheduled_event events[SCHEDULER_QUEUE_MAX_SIZE]; // the queue of events
     int event_count;
+
     bool scheduler_running;
 
 } t_tidal_scheduler;
@@ -90,9 +86,27 @@ void ext_main(void* r)
     tidal_scheduler_class = c;
 }
 
+/* Converts an OSC timetag (64-bit number) in seconds:
+ *
+ *    The upper 32 bits represent seconds since January 1, 1900.
+ *    The lower 32 bits represent fractions of a second.
+ *    It returns a double representing the time in seconds.
+ */
+double osc_timetag_to_seconds(uint64_t timetag)
+{
+    // Upper 32 bits (seconds)
+    uint32_t seconds = (uint32_t)(timetag >> 32);
+    // Lower 32 bits (divide by 2^32)
+    uint32_t fraction = (uint32_t)(timetag & 0xFFFFFFFF);
+    // Convert to double (secondes + fraction)
+    double time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0);
+
+    return time_seconds;
+}
+
 void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count, t_atom* atoms, double execution_time)
 {
-    if (x->event_count < SCHEDULER_QUEUE_SIZE) {
+    if (x->event_count < SCHEDULER_QUEUE_MAX_SIZE) {
         int idx = x->event_count++;
         x->events[idx].address = address;
         x->events[idx].atom_count = atom_count;
@@ -113,24 +127,6 @@ void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count
     }
 }
 
-/* Converts an OSC timetag (a 64-bit value) into seconds:
- *
- *    The upper 32 bits represent seconds since January 1, 1900.
- *    The lower 32 bits represent fractions of a second.
- *    It returns a double representing the time in seconds.
- */
-double osc_timetag_to_seconds(uint64_t timetag)
-{
-    // Upper 32 bits (seconds)
-    uint32_t seconds = (uint32_t)(timetag >> 32);
-    // Lower 32 bits (divide by 2^32)
-    uint32_t fraction = (uint32_t)(timetag & 0xFFFFFFFF);
-    // Convert to double (secondes + fraction)
-    double time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0);
-
-    return time_seconds;
-}
-
 /* The function that runs in a separate thread to continuously listen for incoming OSC messages:
  *
  *   - Sets the socket to non-blocking mode
@@ -142,7 +138,7 @@ double osc_timetag_to_seconds(uint64_t timetag)
  *   - Parses the OSC timetag
  *   - Extracts all messages from the bundle
  *   - Converts OSC data types to atoms (the system's internal data format)
- *   - Sends the data through the outlet
+ *   - Add the OSC event to the queue with an execution time
  *
  * If no data is available, it sleeps briefly
  */
@@ -165,37 +161,22 @@ void* tidal_scheduler_listener(void* arg)
                                       (struct sockaddr*)&sender,
                                       &sender_size);
 
-        if (!(bytes_received > 0)) {
-            systhread_sleep(1);
-        }
-        else {
+        if (bytes_received > 0) {
             // check if bundle
             if (tosc_isBundle(buffer)) {
                 tosc_bundle bundle;
                 tosc_parseBundle(&bundle, buffer, bytes_received);
 
-                // Get timetag
-                uint64_t timetag = tosc_getTimetag(&bundle);
-
-                double osc_seconds = osc_timetag_to_seconds(timetag);
-                double max_time_ms = systimer_gettime();
-                double max_time_seconds = max_time_ms / 1000.0;
-
-                double target_max_time = osc_seconds + x->time_offset;
-                double target_time_ms = target_max_time * 1000.0;
-
-                double delay_time = target_max_time - max_time_seconds;
-                double delay_time_ms = delay_time * 1000.0;
-
                 tosc_message osc;
+
                 while (tosc_getNextMessage(&bundle, &osc)) {
                     const char* address = tosc_getAddress(&osc);
                     const char* format = tosc_getFormat(&osc);
 
-                    t_atom atoms[32];
+                    t_atom atoms[128];
                     int atom_count = 0;
 
-                    for (int i = 0; format[i] != '\0' && atom_count < 32; i++) {
+                    for (int i = 0; format[i] != '\0' && atom_count < 128; i++) {
                         switch (format[i]) {
                             case 'f':
                             {
@@ -218,11 +199,22 @@ void* tidal_scheduler_listener(void* arg)
                         }
                     }
 
+                    uint64_t timetag = tosc_getTimetag(&bundle);
+
+                    double osc_seconds = osc_timetag_to_seconds(timetag);
+                    double execution_time_seconds = osc_seconds + x->time_offset;
+                    double execution_time = execution_time_seconds * 1000.0; // To milliseconds
+
                     critical_enter(0);
-                    add_scheduled_event(x, gensym((char*)address), atom_count, atoms, target_time_ms);
+
+                    add_scheduled_event(x, gensym((char*)address), atom_count, atoms, execution_time);
+
                     critical_exit(0);
                 }
             }
+        }
+        else {
+            systhread_sleep(1);
         }
     }
 
@@ -319,8 +311,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 
         // Default OSC port
         x->port = 7400;
-        // If the object has arguments and the first one is a number
-        // replace the default OSC port with the number
+        // If the object has arguments and the first one is a number replace OSC port
         if (argc > 0 && argv[0].a_type == A_LONG) {
             x->port = atom_getlong(argv);
         }
