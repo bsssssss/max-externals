@@ -86,24 +86,6 @@ void ext_main(void* r)
     tidal_scheduler_class = c;
 }
 
-/* Converts an OSC timetag (64-bit number) in seconds:
- *
- *    The upper 32 bits represent seconds since January 1, 1900.
- *    The lower 32 bits represent fractions of a second.
- *    It returns a double representing the time in seconds.
- */
-double osc_timetag_to_seconds(uint64_t timetag)
-{
-    // Upper 32 bits (seconds)
-    uint32_t seconds = (uint32_t)(timetag >> 32);
-    // Lower 32 bits (divide by 2^32)
-    uint32_t fraction = (uint32_t)(timetag & 0xFFFFFFFF);
-    // Convert to double (secondes + fraction)
-    double time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0);
-
-    return time_seconds;
-}
-
 void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count, t_atom* atoms, double execution_time)
 {
     if (x->event_count < SCHEDULER_QUEUE_MAX_SIZE) {
@@ -119,12 +101,79 @@ void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count
 
         if (!x->scheduler_running) {
             x->scheduler_running = true;
-            clock_fdelay(x->m_clock, 1);
+            clock_fdelay(x->m_clock, 0.0);
         }
     }
     else {
         object_error((t_object*)x, "Queue is full, dropping event");
     }
+}
+
+// The callback function for the clock
+void tidal_scheduler_tick(t_tidal_scheduler* x)
+{
+    critical_enter(0);
+
+    double current_time = systimer_gettime();
+    double next_event_time = DBL_MAX;
+
+    for (int i = 0; i < x->event_count; i++) {
+        if (x->events[i].active) {
+            if (x->events[i].execution_time <= current_time) {
+
+                outlet_anything(
+                    x->m_outlet,
+                    x->events[i].address,
+                    x->events[i].atom_count,
+                    x->events[i].atoms);
+
+                x->events[i].active = false;
+            }
+            else {
+                if (x->events[i].execution_time < next_event_time) {
+                    next_event_time = x->events[i].execution_time;
+                }
+            }
+        }
+    }
+
+    // Reorganize event queue array by compacting active events together at the
+    // beginning of the array
+    int new_count = 0;
+    for (int i = 0; i < x->event_count; i++) {
+        if (x->events[i].active) {
+            if (i != new_count) {
+                x->events[new_count] = x->events[i];
+            }
+            new_count++;
+        }
+    }
+    x->event_count = new_count;
+
+    if (x->event_count > 0 && next_event_time < DBL_MAX) {
+        double delay = next_event_time - current_time;
+        clock_fdelay(x->m_clock, delay);
+        x->scheduler_running = true;
+    }
+    else {
+        x->scheduler_running = false;
+    }
+
+    critical_exit(0);
+}
+
+/* Converts an OSC timetag (64-bit number) in seconds:
+ *
+ *    The upper 32 bits represent seconds since January 1, 1900.
+ *    The lower 32 bits represent fractions of a second.
+ *    It returns a double representing the time in seconds.
+ */
+double osc_timetag_to_seconds(uint64_t timetag)
+{
+    uint32_t seconds = (uint32_t)(timetag >> 32); // Upper 32 bits (seconds)
+    uint32_t fraction = (uint32_t)(timetag & 0xFFFFFFFF); // Lower 32 bits (divide by 2^32)
+    double time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0); // Convert to double (secondes + fraction)
+    return time_seconds;
 }
 
 /* The function that runs in a separate thread to continuously listen for incoming OSC messages:
@@ -221,57 +270,6 @@ void* tidal_scheduler_listener(void* arg)
     return NULL;
 }
 
-// The callback function for the clock
-void tidal_scheduler_tick(t_tidal_scheduler* x)
-{
-    critical_enter(0);
-
-    double current_time = systimer_gettime();
-    double next_event_time = DBL_MAX;
-
-    for (int i = 0; i < x->event_count; i++) {
-        if (x->events[i].active) {
-            if (x->events[i].execution_time <= current_time) {
-
-                outlet_anything(
-                    x->m_outlet,
-                    x->events[i].address,
-                    x->events[i].atom_count,
-                    x->events[i].atoms);
-
-                x->events[i].active = false;
-            }
-            else {
-                if (x->events[i].execution_time < next_event_time) {
-                    next_event_time = x->events[i].execution_time;
-                }
-            }
-        }
-    }
-
-    int new_count = 0;
-    for (int i = 0; i < x->event_count; i++) {
-        if (x->events[i].active) {
-            if (i != new_count) {
-                x->events[new_count] = x->events[i];
-            }
-            new_count++;
-        }
-    }
-    x->event_count = new_count;
-
-    if (x->event_count > 0 && next_event_time < DBL_MAX) {
-        double delay = next_event_time - current_time;
-        clock_fdelay(x->m_clock, delay);
-        x->scheduler_running = true;
-    }
-    else {
-        x->scheduler_running = false;
-    }
-
-    critical_exit(0);
-}
-
 void set_base_time_offset(t_tidal_scheduler* x)
 {
     struct timeval tv;
@@ -284,7 +282,7 @@ void set_base_time_offset(t_tidal_scheduler* x)
     double max_seconds = systimer_gettime() / 1000.0;
 
     x->time_offset = max_seconds - ntp_seconds;
-    object_post((t_object*)x, "base time offset: %.3f", x->time_offset);
+    /*object_post((t_object*)x, "base time offset: %.3f", x->time_offset);*/
 }
 
 /* The constructor function that gets called when a new instance of the object is created:
@@ -304,7 +302,6 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
 
     // Allocate memory for the object and check if allocation is successful
     if ((x = (t_tidal_scheduler*)object_alloc(tidal_scheduler_class))) {
-
         object_post((t_object*)x, "Initialized");
 
         set_base_time_offset(x);

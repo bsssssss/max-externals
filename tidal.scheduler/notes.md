@@ -11,7 +11,7 @@ the fraction of a second.
 
 It represents a time (as in a date) in the future to 'play' the message at.
 
-So to schedule the message, we need to know how much time there is between the
+To schedule the message, we need to know how much time there is between the
 moment the message is received and the timestamp in the future.
 
 $ delay = time_in_future - current_time $
@@ -27,5 +27,69 @@ in 70 years:
 The convertion is a simple addition
     
     NTP_time = UNIX_time + 2208988800
+
+We can use this value to set a base time offset value in the instance 
+that will be used to calculate the relative time of the OSC timetag.
+
+At the object's init, we can call ```systimer_gettime()``` which gives us the
+current time of max in milliseconds, divide this by 1000 to get seconds.
+
+The base offset is simply $ max_time_sec - ntp_sec $ (a big negative number).
+
+Then, when an osc message arrives, we add the timetag to the offset.
+That gives us the time in the future at which point the message should be
+output in seconds. Multiply this by 1000.0 and we have the execution time in
+milliseconds !
+
+---
+
+# Schematic of the program
+
+[RÉCEPTION DU MESSAGE OSC]
+    ↓
+    │ Thread Listener (tidal_scheduler_listener)
+    ↓
+[ANALYSE DU BUNDLE OSC]
+    │ • Extraction du timetag OSC
+    │ • Conversion en temps Max (osc_seconds + time_offset)
+    │ • Analyse des messages contenus dans le bundle
+    ↓
+[AJOUT À LA FILE D'ATTENTE] ────────────>critical_enter(0)
+    │ • Création d'un événement programmé              
+    │ • Stockage dans ```events[event_count]```        
+    │ • Activation du scheduler si nécessaire          
+    ↓                                    critical_exit(0)
+    │
+    │                  [ATTENTE]
+    │
+    ↓
+[DÉCLENCHEMENT HORLOGE] ──> clock_fdelay déclenche tidal_scheduler_tick
+    │
+    ↓                                    critical_enter(0)
+[TRAITEMENT DES ÉVÉNEMENTS]                             
+    │ • Parcours de tous les événements                 
+    │ • Vérification des temps d'exécution             
+    │ • Exécution des événements arrivés à échéance    
+    │ • Marquage comme inactifs                        
+    ↓                                                  
+[COMPACTAGE DU TABLEAU]                                
+    │ • Déplacement des événements actifs au début     
+    │ • Mise à jour du compteur d'événements           
+    ↓                                                  
+[PROGRAMMATION DU PROCHAIN TICK]                       
+    │ • Calcul du délai jusqu'au prochain événement    
+    │ • Programmation de l'horloge                     
+    ↓                                    critical_exit(0)
+    │
+    ↓
+[SORTIE DU MESSAGE]
+    │ • Le message est envoyé vers la sortie via outlet_anything()
+    ↓
+[TRAITEMENT PAR MAX]
+
+
+
+
+
 
 
