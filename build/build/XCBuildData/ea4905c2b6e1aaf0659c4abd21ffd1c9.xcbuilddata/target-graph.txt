@@ -1,0 +1,8 @@
+Target dependency graph (4 targets)
+Target 'ALL_BUILD' in project 'max-externals'
+➜ Explicit dependency on target 'ZERO_CHECK' in project 'max-externals'
+➜ Explicit dependency on target 'helloworld' in project 'max-externals'
+➜ Explicit dependency on target 'tidal.scheduler' in project 'max-externals'
+Target 'tidal.scheduler' in project 'max-externals' (no dependencies)
+Target 'helloworld' in project 'max-externals' (no dependencies)
+Target 'ZERO_CHECK' in project 'max-externals' (no dependencies)
