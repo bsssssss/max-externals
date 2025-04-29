@@ -1,16 +1,16 @@
 #include "ext.h"
+#include "ext_critical.h"
 #include "ext_mess.h"
 #include "ext_obex.h"
-#include "ext_critical.h"
 
+#include <fcntl.h>
 #include <float.h>
+#include <netinet/in.h>
 #include <sys/_types/_socklen_t.h>
 #include <sys/fcntl.h>
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
+#include <sys/types.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 #include <sys/time.h>
 
@@ -30,38 +30,38 @@
 
 typedef struct _scheduled_event
 {
-    t_symbol* address;
-    int atom_count;
-    t_atom atoms[32];
-    double execution_time;
-    bool active;
+    t_symbol *address;
+    int       atom_count;
+    t_atom    atoms[32];
+    double    execution_time;
+    bool      active;
 
 } t_scheduled_event;
 
 typedef struct _tidal_scheduler
 {
-    t_object obj; // max object
-    void* m_outlet; // max outlet
-    void* m_clock; // max clock
+    t_object obj;      // max object
+    void    *m_outlet; // max outlet
+    void    *m_clock;  // max clock
 
-    int socket_fd; // udp socket
-    long port; // udp port
+    int  socket_fd; // udp socket
+    long port;      // udp port
 
     t_systhread thread; // main thread
-    int thread_running;
+    int         thread_running;
 
-    double time_offset; // time offset to convert absolute osc timetags to relative time
+    double            time_offset;                      // time offset to convert absolute osc timetags to relative time
     t_scheduled_event events[SCHEDULER_QUEUE_MAX_SIZE]; // the queue of events
-    int event_count;
+    int               event_count;
 
     bool scheduler_running;
 
 } t_tidal_scheduler;
 
-void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv);
-void tidal_scheduler_free(t_tidal_scheduler* x);
+void *tidal_scheduler_new(t_symbol *s, long argc, t_atom *argv);
+void  tidal_scheduler_free(t_tidal_scheduler *x);
 
-static t_class* tidal_scheduler_class;
+static t_class *tidal_scheduler_class;
 
 /////////////////////////////////////////////////////////////////////////////////
 
@@ -71,9 +71,9 @@ static t_class* tidal_scheduler_class;
  *   - Sets up the constructor and destructor methods
  *   - Registers the class in the system
  */
-void ext_main(void* r)
+void ext_main(void *r)
 {
-    t_class* c;
+    t_class *c;
     c = class_new("tidal.scheduler",
                   (method)tidal_scheduler_new,
                   (method)tidal_scheduler_free,
@@ -86,14 +86,14 @@ void ext_main(void* r)
     tidal_scheduler_class = c;
 }
 
-void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count, t_atom* atoms, double execution_time)
+void add_scheduled_event(t_tidal_scheduler *x, t_symbol *address, int atom_count, t_atom *atoms, double execution_time)
 {
     if (x->event_count < SCHEDULER_QUEUE_MAX_SIZE) {
-        int idx = x->event_count++;
-        x->events[idx].address = address;
-        x->events[idx].atom_count = atom_count;
+        int idx                       = x->event_count++;
+        x->events[idx].address        = address;
+        x->events[idx].atom_count     = atom_count;
         x->events[idx].execution_time = execution_time;
-        x->events[idx].active = true;
+        x->events[idx].active         = true;
 
         for (int i = 0; i < atom_count; i++) {
             x->events[idx].atoms[i] = atoms[i];
@@ -105,16 +105,16 @@ void add_scheduled_event(t_tidal_scheduler* x, t_symbol* address, int atom_count
         }
     }
     else {
-        object_error((t_object*)x, "Queue is full, dropping event");
+        object_error((t_object *)x, "Queue is full, dropping event");
     }
 }
 
 // The callback function for the clock
-void tidal_scheduler_tick(t_tidal_scheduler* x)
+void tidal_scheduler_tick(t_tidal_scheduler *x)
 {
     critical_enter(0);
 
-    double current_time = systimer_gettime();
+    double current_time    = systimer_gettime();
     double next_event_time = DBL_MAX;
 
     for (int i = 0; i < x->event_count; i++) {
@@ -170,9 +170,9 @@ void tidal_scheduler_tick(t_tidal_scheduler* x)
  */
 double osc_timetag_to_seconds(uint64_t timetag)
 {
-    uint32_t seconds = (uint32_t)(timetag >> 32); // Upper 32 bits (seconds)
-    uint32_t fraction = (uint32_t)(timetag & 0xFFFFFFFF); // Lower 32 bits (divide by 2^32)
-    double time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0); // Convert to double (secondes + fraction)
+    uint32_t seconds      = (uint32_t)(timetag >> 32);                             // Upper 32 bits (seconds)
+    uint32_t fraction     = (uint32_t)(timetag & 0xFFFFFFFF);                      // Lower 32 bits (divide by 2^32)
+    double   time_seconds = (double)(seconds) + ((double)fraction / 4294967296.0); // Convert to double (secondes + fraction)
     return time_seconds;
 }
 
@@ -191,12 +191,12 @@ double osc_timetag_to_seconds(uint64_t timetag)
  *
  * If no data is available, it sleeps briefly
  */
-void* tidal_scheduler_listener(void* arg)
+void *tidal_scheduler_listener(void *arg)
 {
-    t_tidal_scheduler* x = (t_tidal_scheduler*)arg;
-    char buffer[1024];
+    t_tidal_scheduler *x = (t_tidal_scheduler *)arg;
+    char               buffer[1024];
     struct sockaddr_in sender;
-    socklen_t sender_size = sizeof(sender);
+    socklen_t          sender_size = sizeof(sender);
 
     // Make thread non-blocking
     int flags = fcntl(x->socket_fd, F_GETFL, 0);
@@ -207,7 +207,7 @@ void* tidal_scheduler_listener(void* arg)
                                       buffer,
                                       sizeof(buffer) - 1,
                                       0,
-                                      (struct sockaddr*)&sender,
+                                      (struct sockaddr *)&sender,
                                       &sender_size);
 
         if (bytes_received > 0) {
@@ -219,11 +219,11 @@ void* tidal_scheduler_listener(void* arg)
                 tosc_message osc;
 
                 while (tosc_getNextMessage(&bundle, &osc)) {
-                    const char* address = tosc_getAddress(&osc);
-                    const char* format = tosc_getFormat(&osc);
+                    const char *address = tosc_getAddress(&osc);
+                    const char *format  = tosc_getFormat(&osc);
 
                     t_atom atoms[128];
-                    int atom_count = 0;
+                    int    atom_count = 0;
 
                     for (int i = 0; format[i] != '\0' && atom_count < 128; i++) {
                         switch (format[i]) {
@@ -241,8 +241,8 @@ void* tidal_scheduler_listener(void* arg)
                             }
                             case 's':
                             {
-                                const char* s = tosc_getNextString(&osc);
-                                atom_setsym(&atoms[atom_count++], gensym((char*)s));
+                                const char *s = tosc_getNextString(&osc);
+                                atom_setsym(&atoms[atom_count++], gensym((char *)s));
                                 break;
                             }
                         }
@@ -250,13 +250,13 @@ void* tidal_scheduler_listener(void* arg)
 
                     uint64_t timetag = tosc_getTimetag(&bundle);
 
-                    double osc_seconds = osc_timetag_to_seconds(timetag);
+                    double osc_seconds            = osc_timetag_to_seconds(timetag);
                     double execution_time_seconds = osc_seconds + x->time_offset;
-                    double execution_time = execution_time_seconds * 1000.0; // To milliseconds
+                    double execution_time         = execution_time_seconds * 1000.0; // To milliseconds
 
                     critical_enter(0);
 
-                    add_scheduled_event(x, gensym((char*)address), atom_count, atoms, execution_time);
+                    add_scheduled_event(x, gensym((char *)address), atom_count, atoms, execution_time);
 
                     critical_exit(0);
                 }
@@ -270,7 +270,7 @@ void* tidal_scheduler_listener(void* arg)
     return NULL;
 }
 
-void set_base_time_offset(t_tidal_scheduler* x)
+void set_base_time_offset(t_tidal_scheduler *x)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -278,8 +278,8 @@ void set_base_time_offset(t_tidal_scheduler* x)
     /*object_post((t_object*)t, "UNIX time at object creation (sec): %.3f", unix_time);*/
 
     const unsigned long NTP_UNIX_OFFSET = 2208988800UL;
-    double ntp_seconds = unix_time + NTP_UNIX_OFFSET;
-    double max_seconds = systimer_gettime() / 1000.0;
+    double              ntp_seconds     = unix_time + NTP_UNIX_OFFSET;
+    double              max_seconds     = systimer_gettime() / 1000.0;
 
     x->time_offset = max_seconds - ntp_seconds;
     /*object_post((t_object*)x, "base time offset: %.3f", x->time_offset);*/
@@ -294,15 +294,15 @@ void set_base_time_offset(t_tidal_scheduler* x)
  *     - Sets up a UDP socket on the specified port
  *     - Starts a listener thread that will receive OSC messages
  */
-void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
+void *tidal_scheduler_new(t_symbol *s, long argc, t_atom *argv)
 {
     // Declare a pointer to the t_tidal_scheduler struct
     // Initialize to NULL to avoid problems if allocation fails
-    t_tidal_scheduler* x = NULL;
+    t_tidal_scheduler *x = NULL;
 
     // Allocate memory for the object and check if allocation is successful
-    if ((x = (t_tidal_scheduler*)object_alloc(tidal_scheduler_class))) {
-        object_post((t_object*)x, "Initialized");
+    if ((x = (t_tidal_scheduler *)object_alloc(tidal_scheduler_class))) {
+        object_post((t_object *)x, "Initialized");
 
         set_base_time_offset(x);
 
@@ -317,33 +317,33 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
         x->m_outlet = outlet_new(x, NULL);
 
         // Create clock
-        x->m_clock = clock_new((t_object*)x, (method)tidal_scheduler_tick);
+        x->m_clock = clock_new((t_object *)x, (method)tidal_scheduler_tick);
 
         // create UDP socket
         // AF_INET = IPv4, SOCK_DGRAM = UDP mode (without connexion)
         x->socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
         // Check if socket creation succeeded
         if (x->socket_fd < 0) {
-            object_error((t_object*)x, "Failed to create socket");
+            object_error((t_object *)x, "Failed to create socket");
             return x;
         }
 
         // Address config
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(x->port);
+        addr.sin_family      = AF_INET;
+        addr.sin_port        = htons(x->port);
         addr.sin_addr.s_addr = INADDR_ANY;
 
         // Binding the socket to the address and port
         // Make the socket able to receive messages adressed to the port
-        if (bind(x->socket_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            object_error((t_object*)x, "Failed to bind socket to port %ld", x->port);
+        if (bind(x->socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            object_error((t_object *)x, "Failed to bind socket to port %ld", x->port);
             close(x->socket_fd);
             x->socket_fd = -1;
             return x;
         }
-        object_post((t_object*)x, "Bound to port %ld", x->port);
+        object_post((t_object *)x, "Bound to port %ld", x->port);
 
         // Configure and start
         x->thread_running = 1;
@@ -351,7 +351,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
         // Create new thread which will execute tidal_scheduler_listener
         // This thread continuously listen to OSC message coming on the socket
         systhread_create((method)tidal_scheduler_listener, x, 0, 0, 0, &x->thread);
-        object_post((t_object*)x, "Listener thread started");
+        object_post((t_object *)x, "Listener thread started");
     }
     return x;
 }
@@ -362,7 +362,7 @@ void* tidal_scheduler_new(t_symbol* s, long argc, t_atom* argv)
  *    - Closes the socket
  *    - Frees the clock object
  */
-void tidal_scheduler_free(t_tidal_scheduler* x)
+void tidal_scheduler_free(t_tidal_scheduler *x)
 {
     if (x->thread_running) {
         x->thread_running = 0;

@@ -23,6 +23,7 @@ To generate the projects I use Ninja so compile_commands.json can be generated
 ```bash
 cmake -G "Ninja" ..
 cmake --build .
+cmake --build . --target <project_name> # To build a specific project
 ```
 
 For building on windows or if facing problems check: https://github.com/Cycling74/max-sdk
