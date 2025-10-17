@@ -26,4 +26,5 @@ cmake --build .
 cmake --build . --target <project_name> # To build a specific project
 ```
 
-For building on windows or if facing problems check: https://github.com/Cycling74/max-sdk
+If the CMakeCache.txt file is messed up (for example when directories have
+changed), delete everything in the build dir.
