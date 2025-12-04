@@ -22,7 +22,7 @@ To generate the projects I use Ninja so compile_commands.json can be generated
 
 ```bash
 cmake -G "Ninja" ..
-cmake --build .
+cmake --build . # build everything
 cmake --build . --target <project_name> # To build a specific project
 ```
 
