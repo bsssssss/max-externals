@@ -26,5 +26,9 @@ cmake --build . # build everything
 cmake --build . --target <project_name> # To build a specific project
 ```
 
+If building an external with a `~` at the end (for audio objects for example).
+If the project is named `myproject~`, then the build target is
+`myproject_tilde`.
+
 If the CMakeCache.txt file is messed up (for example when directories have
 changed), delete everything in the build dir.

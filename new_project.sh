@@ -15,7 +15,9 @@ fi
 
 
 # Prompt for project name
-read -p "project name (no spaces): " project_name
+
+read -p "project name: " _project_name
+project_name=$(echo "$_project_name"| sed 's/[^a-zA-Z0-9_]/_/g')
 project_path="$category_path/$project_name"
 
 if [ -d $project_path ]; then
