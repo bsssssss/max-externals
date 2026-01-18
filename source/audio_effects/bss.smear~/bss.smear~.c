@@ -7,10 +7,12 @@
 #include "ext_obex.h" // required for new style Max object
 #include "z_dsp.h"
 
+#define MAX_FILTERS 96
+
 typedef struct _bss_smear {
     t_pxobject obj;
-    t_double   prev_samp;
-    t_double   g;
+    t_double   sample[MAX_FILTERS];
+    t_double   g[MAX_FILTERS];
 } t_bss_smear;
 
 static t_class* s_bss_smear_class;
@@ -63,6 +65,14 @@ void ext_main(void* r)
     s_bss_smear_class = c;
 }
 
+void bss_smear_init(t_bss_smear* x)
+{
+    for (int i = 0; i < MAX_FILTERS; i++) {
+        x->sample[i] = 0.0;
+        x->g[i]      = 0.0;
+    }
+}
+
 void bss_smear_dsp64(
     t_bss_smear* x,
     t_object*    dsp64,
@@ -72,8 +82,7 @@ void bss_smear_dsp64(
     long         flags)
 {
     dsp_add64(dsp64, (t_object*)x, (t_perfroutine64)bss_smear_perform64, 0, NULL);
-    x->prev_samp = 0.0;
-    x->g         = 0.0;
+    bss_smear_init(x);
 }
 
 void bss_smear_perform64(
@@ -90,20 +99,21 @@ void bss_smear_perform64(
     t_double* in  = ins[0];
     t_double* out = outs[0];
     t_double  g   = *ins[1];
-
-    t_double zi = o->prev_samp;
-    t_double xin, x, y;
+    t_double  xin, x, y, z;
 
     while (sampleframes--) {
         xin = *in++;
 
-        x      = xin + zi * g;
-        y      = x * -g + zi;
-        *out++ = y;
+        for (int i = 0; i < MAX_FILTERS; i++) {
+            z = o->sample[i];
+            x = xin + z * g;
+            y = x * -g + z;
 
-        zi = x;
+            o->sample[i] = x;
+            xin          = y;
+        }
+        *out++ = y;
     }
-    o->prev_samp = zi;
 }
 
 /* Provides inlets/outlets assistance on hover */
