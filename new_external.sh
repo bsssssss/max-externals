@@ -66,21 +66,20 @@ cat > "$project_path/$project_name.c" << EOF
 #include "ext.h"      // standard Max include, always required
 #include "ext_obex.h" // required for new style Max object
 
-// structure de l'objet max
+// Max external struct
 typedef struct _${project_name}
 {
-    t_object obj; // L'objet lui meme (doit etre en premier)
+    t_object obj; // must be first
     void    *m_outlet1;
 } t_${project_name};
 
-// déclaration des fonctions
 void *${project_name}_new(void);
 void  ${project_name}_bang(t_${project_name} *x);
 
-// pointeur vers la classe
+// pointer to the external class
 static t_class *s_${project_name}_class;
 
-// fonction d'initialisation (quand on ouvre max)
+// Initialization routine (when the external is first loaded on Max startup)
 void ext_main(void *r)
 {
     t_class *c;
@@ -97,7 +96,7 @@ void ext_main(void *r)
     s_${project_name}_class = c;
 }
 
-// routine d'instanciation
+// Instanciation routine
 void *${project_name}_new()
 {
     t_${project_name} *x = (t_${project_name} *)object_alloc(s_${project_name}_class);
@@ -107,7 +106,7 @@ void *${project_name}_new()
     return x;
 }
 
-// faire quelque chose avec les messages
+// Do something on bang
 void ${project_name}_bang(t_${project_name} *x)
 {
     outlet_anything(x->m_outlet1, gensym("Hello Max !"), 0, NULL);
